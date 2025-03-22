@@ -29,8 +29,9 @@ def func_init():
     return arr 
 
 def get_important_nodes(x): 
-    mask = [False] * (21 * 3  * 2)  # 21 landmarks * 3 coordinates (x, y, z)
-    values = list(range(8 + 1)) #Thumb Index and Palm nodes 
+    #Select only nodes that we want 
+    mask = [False] * (21 * 3  * 2) 
+    values = list(range(8 + 1)) # Index landmarks of thumb, index, palm
 
     for i in values: 
        mask[i*3] = True
@@ -62,71 +63,49 @@ def best_match_dtw(V, D, dist_func):
 
     return best_index
 
+
 def manhattan_distance(x, y):
-    # x = np.array(x)
-    # y = np.array(y)
-    # mask = (x != -99) & (y != -99)
-    
-    # if np.sum(mask) == 0:
-    #     return 0.0
-
-    # x = x[mask]
-    # y = y[mask]
-
+    x = get_important_nodes(x)
+    y = get_important_nodes(y)
     return sum(abs(a - b) for a, b in zip(x, y))
 
 def chebyshev_distance(x, y):
-    # x = np.array(x)
-    # y = np.array(y)
-    # mask = (x != -99) & (y != -99)
-    
-    # if np.sum(mask) == 0:
-    #     return 0.0
-    # x = x[mask]
-    # y = y[mask]
+    x = get_important_nodes(x)
+    y = get_important_nodes(y)
     return max(abs(a - b) for a, b in zip(x, y))
 
 def minkowski_distance(x, y, p=3):  # try different p values
-    # x = np.array(x)
-    # y = np.array(y)
-    # mask = (x != -99) & (y != -99)
-    
-    # if np.sum(mask) == 0:
-    #     return 0.0
-    # x = x[mask]
-    # y = y[mask]
- 
+    x = get_important_nodes(x)
+    y = get_important_nodes(y)
     return sum(abs(a - b) ** p for a, b in zip(x, y)) ** (1 / p)
  
 if __name__ == '__main__':
+    #Different distance algo to test
     dist_algo = [
-        euclidean, 
-        manhattan_distance, 
-        chebyshev_distance, 
+        manhattan_distance,
+        chebyshev_distance,
         minkowski_distance
     ]
-
-    templates = func_init()
+    templates = func_init() #get time series of all types 
     gesture_labels = ["howareyou", "nicetomeetu", "my name is "]
-    model_path = r"C:\Users\joelj\projects\my-augmented-voice\templateTests\model\hand_landmarker.task"
 
+    model_path = r"C:\Users\joelj\projects\my-augmented-voice\templateTests\model\hand_landmarker.task"
     BaseOptions = mp.tasks.BaseOptions
     HandLandmarker = mp.tasks.vision.HandLandmarker
     HandLandmarkerOptions = mp.tasks.vision.HandLandmarkerOptions
     VisionRunningMode = mp.tasks.vision.RunningMode
-
     options = HandLandmarkerOptions(
     base_options=BaseOptions(model_asset_path=model_path),
     running_mode=VisionRunningMode.IMAGE, num_hands=2)
+    
+    cap = cv2.VideoCapture(0); 
 
     results = ""
-
-    cap = cv2.VideoCapture(0); 
     gesture_frames = []      
-    capturing = True        
-    capture_length = 267  
-    last_recog_phrase = ""
-    multi_recog_phrases =[] 
+    capturing = False        
+    capture_length = 267  # Number of frames to capture before running dtw algo 
+    last_recog_phrase = "" #Store Euclidean distance 
+    multi_recog_phrases =[] #Store results of dtw from dist_algo
 
     with HandLandmarker.create_from_options(options) as landmarker:
         while True:
@@ -134,24 +113,20 @@ if __name__ == '__main__':
             if not ret:
                 break
 
-            frame = cv2.flip(frame, 1)
+            frame = cv2.flip(frame, 1) #REQUIRED?
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
             results = landmarker.detect(mp_image)
-            row_data = []  # Start with the frame number
 
-                # Initialize left and right hand data lists
+            #pad data if required
+            row_data = []
             left_hand_data = []
             right_hand_data = []
-
             if results.hand_world_landmarks:
                 for hand_index, hand_world_landmarks in enumerate(results.hand_world_landmarks):
                     hand_data = []
                     for landmark_index, landmark in enumerate(hand_world_landmarks):
                         hand_data.extend([landmark.x, landmark.y, landmark.z])  # Add x, y, z coordinates
-
-
-                    # Assuming handedness is reliable, assign to left or right hand
                     if results.handedness and len(results.handedness) > hand_index:
                         handedness = results.handedness[hand_index][0].category_name  # Get "Left" or "Right"
                         if handedness == "Left":
@@ -163,21 +138,14 @@ if __name__ == '__main__':
                     else:
                         print("Handedness information not available or not enough hands detected") # Debugging
 
-                padding = [0] * (21 * 3)  # 21 landmarks * 3 coordinates (x, y, z)
+                padding = [0] * (21 * 3)  
                 if not left_hand_data:
                     left_hand_data = padding
                 if not right_hand_data:
                     right_hand_data = padding
-
                 row_data.extend(left_hand_data)
                 row_data.extend(right_hand_data)
 
-                # landmark_vector = []
-                # if results.hand_world_landmarks: 
-                #     for hand_index, hand_world_landmarks in enumerate(results.hand_world_landmarks):
-                #         for landmark_index, landmark in enumerate(hand_world_landmarks):
-                #             landmark_vector.extend([landmark.x, landmark.y, landmark.z])
-                
                 if capturing:
                     gesture_frames.append(row_data)
                 
@@ -188,7 +156,7 @@ if __name__ == '__main__':
                             cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
             
             for index, phrase in enumerate(multi_recog_phrases): 
-                cv2.putText(frame, phrase, (400, 90-(index*20)),
+                cv2.putText(frame, f"{index}.{phrase}", (400, 90-(index*20)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
 
             if capturing:
