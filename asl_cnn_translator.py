@@ -132,32 +132,6 @@ class ASLCNNTranslator:
         
         return model
     
-    def _create_image_model(self):
-        base_model = MobileNetV2(
-            input_shape=(IMAGE_SIZE, IMAGE_SIZE, 3),
-            include_top=False,
-            weights='imagenet'
-        )
-        
-        base_model.trainable = False
-        
-        inputs = tf.keras.Input(shape=(IMAGE_SIZE, IMAGE_SIZE, 3))
-        x = base_model(inputs, training=False)
-        x = tf.keras.layers.GlobalAveragePooling2D()(x)
-        x = tf.keras.layers.Dense(128, activation='relu')(x)
-        x = tf.keras.layers.Dropout(0.3)(x)
-        outputs = tf.keras.layers.Dense(self.num_classes, activation='softmax')(x)
-        
-        model = Model(inputs, outputs)
-        
-        model.compile(
-            optimizer=Adam(learning_rate=0.001),
-            loss='categorical_crossentropy',
-            metrics=['accuracy']
-        )
-        
-        return model
-    
     def _create_sequence_model(self):
         input_dim = NUM_LANDMARKS * 3 * 2  # 21 landmarks * 3 coordinates * 2 hands
         num_output_classes = max(1, self.num_classes)
@@ -180,51 +154,6 @@ class ASLCNNTranslator:
         
         return model
     
-    def _preprocess_landmarks(self, hand_landmarks_list):
-        if not hand_landmarks_list:
-            return None
-            
-        feature_vector = np.zeros(NUM_LANDMARKS * 3 * 2)
-        
-        for i, hand_landmarks in enumerate(hand_landmarks_list[:2]):
-            for j, landmark in enumerate(hand_landmarks.landmark):
-                idx = i * NUM_LANDMARKS * 3 + j * 3
-                feature_vector[idx] = landmark.x
-                feature_vector[idx + 1] = landmark.y
-                feature_vector[idx + 2] = landmark.z
-                
-        return feature_vector
-    
-    def _preprocess_hand_image(self, frame, hand_landmarks):
-        h, w, _ = frame.shape
-        x_min, y_min = w, h
-        x_max, y_max = 0, 0
-        
-        for landmark in hand_landmarks.landmark:
-            x, y = int(landmark.x * w), int(landmark.y * h)
-            x_min = min(x_min, x)
-            y_min = min(y_min, y)
-            x_max = max(x_max, x)
-            y_max = max(y_max, y)
-        
-        padding = 20
-        x_min = max(0, x_min - padding)
-        y_min = max(0, y_min - padding)
-        x_max = min(w, x_max + padding)
-        y_max = min(h, y_max + padding)
-        
-        if x_max <= x_min or y_max <= y_min:
-            return None
-            
-        hand_img = frame[y_min:y_max, x_min:x_max]
-        hand_img = cv2.resize(hand_img, (IMAGE_SIZE, IMAGE_SIZE))
-        
-        if len(hand_img.shape) == 3 and hand_img.shape[2] == 3:
-            hand_img = cv2.cvtColor(hand_img, cv2.COLOR_BGR2RGB)
-        
-        hand_img = hand_img / 255.0
-        
-        return hand_img
     
     def recognize_sign(self, frame, hand_landmarks_list):
         if len(self.labels) == 0:
