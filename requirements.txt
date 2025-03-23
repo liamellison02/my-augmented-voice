@@ -1,3 +1,8 @@
-opencv-python==4.7.0.68
-mediapipe==0.10.5
-scikit-learn==1.2.0
+mediapipe>=0.9.0
+onnxruntime>=1.12.0
+tensorflow>=2.8.0; platform_system != "Darwin" or platform_machine != "arm64"
+tensorflow-macos>=2.8.0; platform_system == "Darwin" and platform_machine == "arm64"
+tensorflow-metal>=0.5.0; platform_system == "Darwin" and platform_machine == "arm64"
+opencv-python>=4.6.0
+numpy>=1.22.0
+pyttsx3>=2.90
