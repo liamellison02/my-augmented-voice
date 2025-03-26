@@ -72,13 +72,11 @@ class ASLCNNTranslator:
         else:
             self.labels = []
             
-        self.num_classes = max(1, len(self.labels))  # Ensure at least 1 class
+        self.num_classes = max(1, len(self.labels))
         
-        # Create mappings
         self.label_to_idx = {label: i for i, label in enumerate(self.labels)}
         self.idx_to_label = {i: label for i, label in enumerate(self.labels)}
         
-        # Create or load landmark model
         if self.load_existing and os.path.exists(LANDMARK_MODEL_PATH):
             try:
                 print(f"Loading existing landmark model from {LANDMARK_MODEL_PATH}")
@@ -91,7 +89,6 @@ class ASLCNNTranslator:
             print("Creating new landmark model...")
             self.landmark_model = self._create_landmark_model()
             
-        # Create or load sequence model for dynamic gestures
         if self.load_existing and os.path.exists(SEQUENCE_MODEL_PATH):
             try:
                 print(f"Loading existing sequence model from {SEQUENCE_MODEL_PATH}")
@@ -105,12 +102,8 @@ class ASLCNNTranslator:
             self.sequence_model = self._create_sequence_model()
         
     def _create_landmark_model(self):
-        """Create a model for landmark-based recognition"""
-        # Model for hand landmarks (x, y, z for each of the 21 landmarks = 63 features)
-        # We'll use two hands, so we'll double the input size
         input_dim = NUM_LANDMARKS * 3 * 2  # 21 landmarks * 3 coordinates * 2 hands
         
-        # Make sure we have at least 1 class to predict
         num_output_classes = max(1, self.num_classes)
         print(f"Creating landmark model with {num_output_classes} output classes")
         
@@ -123,6 +116,32 @@ class ASLCNNTranslator:
             Dropout(0.3),
             Dense(num_output_classes, activation='softmax')
         ])
+        
+        model.compile(
+            optimizer=Adam(learning_rate=0.001),
+            loss='categorical_crossentropy',
+            metrics=['accuracy']
+        )
+        
+        return model
+    
+    def _create_image_model(self):
+        base_model = MobileNetV2(
+            input_shape=(IMAGE_SIZE, IMAGE_SIZE, 3),
+            include_top=False,
+            weights='imagenet'
+        )
+        
+        base_model.trainable = False
+        
+        inputs = tf.keras.Input(shape=(IMAGE_SIZE, IMAGE_SIZE, 3))
+        x = base_model(inputs, training=False)
+        x = tf.keras.layers.GlobalAveragePooling2D()(x)
+        x = tf.keras.layers.Dense(128, activation='relu')(x)
+        x = tf.keras.layers.Dropout(0.3)(x)
+        outputs = tf.keras.layers.Dense(self.num_classes, activation='softmax')(x)
+        
+        model = Model(inputs, outputs)
         
         model.compile(
             optimizer=Adam(learning_rate=0.001),
@@ -154,6 +173,51 @@ class ASLCNNTranslator:
         
         return model
     
+    def _preprocess_landmarks(self, hand_landmarks_list):
+        if not hand_landmarks_list:
+            return None
+            
+        feature_vector = np.zeros(NUM_LANDMARKS * 3 * 2)
+        
+        for i, hand_landmarks in enumerate(hand_landmarks_list[:2]):
+            for j, landmark in enumerate(hand_landmarks.landmark):
+                idx = i * NUM_LANDMARKS * 3 + j * 3
+                feature_vector[idx] = landmark.x
+                feature_vector[idx + 1] = landmark.y
+                feature_vector[idx + 2] = landmark.z
+                
+        return feature_vector
+    
+    def _preprocess_hand_image(self, frame, hand_landmarks):
+        h, w, _ = frame.shape
+        x_min, y_min = w, h
+        x_max, y_max = 0, 0
+        
+        for landmark in hand_landmarks.landmark:
+            x, y = int(landmark.x * w), int(landmark.y * h)
+            x_min = min(x_min, x)
+            y_min = min(y_min, y)
+            x_max = max(x_max, x)
+            y_max = max(y_max, y)
+        
+        padding = 20
+        x_min = max(0, x_min - padding)
+        y_min = max(0, y_min - padding)
+        x_max = min(w, x_max + padding)
+        y_max = min(h, y_max + padding)
+        
+        if x_max <= x_min or y_max <= y_min:
+            return None
+            
+        hand_img = frame[y_min:y_max, x_min:x_max]
+        hand_img = cv2.resize(hand_img, (IMAGE_SIZE, IMAGE_SIZE))
+        
+        if len(hand_img.shape) == 3 and hand_img.shape[2] == 3:
+            hand_img = cv2.cvtColor(hand_img, cv2.COLOR_BGR2RGB)
+        
+        hand_img = hand_img / 255.0
+        
+        return hand_img
     
     def recognize_sign(self, frame, hand_landmarks_list):
         if len(self.labels) == 0:
@@ -536,7 +600,7 @@ class ASLCNNTranslator:
             return False
 
 def setup_camera():
-    cap = cv2.VideoCapture(1)
+    cap = cv2.VideoCapture(0)
     
     if not cap.isOpened():
         print("Error: Could not open camera.")
@@ -600,6 +664,7 @@ class ASLTranslatorGUI:
         self.fps = 0
         self.prev_time = time.time()
         self.frame_count = 0
+        self.tts_enabled = True
         
         self.create_widgets()
         
@@ -674,6 +739,14 @@ class ASLTranslatorGUI:
             variable=self.dynamic_rec_var,
             command=self.toggle_dynamic_recognition)
         self.dynamic_button.pack(fill=tk.X, pady=5)
+        
+        self.tts_var = tk.BooleanVar(value=True)
+        self.tts_toggle_button = ttk.Checkbutton(
+            controls_frame,
+            text="Text-to-Speech Enabled",
+            variable=self.tts_var,
+            command=self.toggle_tts)
+        self.tts_toggle_button.pack(fill=tk.X, pady=5)
         
         self.speak_button = ttk.Button(
             controls_frame, 
@@ -752,7 +825,6 @@ class ASLTranslatorGUI:
                 fill="white", 
                 font=('Arial', 20))
         else:
-            # Start camera
             self.cap = setup_camera()
             if self.cap is None:
                 messagebox.showerror("Error", "Could not open camera.")
@@ -778,7 +850,7 @@ class ASLTranslatorGUI:
         
         results = self.hands.process(frame_rgb)
         
-        processed_frame = self.translator.process_frame(frame, results, self.tts_engine)
+        processed_frame = self.translator.process_frame(frame, results, self.tts_engine if self.tts_enabled else lambda x: self.update_status(f"Recognized: {x} (TTS disabled)"))
         
         if self.translator.is_collecting:
             collected = len(self.translator.collected_frames)
@@ -806,15 +878,32 @@ class ASLTranslatorGUI:
         self.sequence_info_var.set(f"Sequence Buffer: {buffer_size}/{buffer_max}")
         
         self.current_frame = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB)
-        self.photo = ImageTk.PhotoImage(image=Image.fromarray(self.current_frame))
         
         canvas_width = self.canvas.winfo_width()
         canvas_height = self.canvas.winfo_height()
-        self.canvas.delete("all")
-        self.canvas.create_image(canvas_width/2, canvas_height/2, image=self.photo, anchor=tk.CENTER)
+        
+        if canvas_width > 0 and canvas_height > 0:
+            frame_height, frame_width = self.current_frame.shape[:2]
+            
+            width_ratio = canvas_width / frame_width
+            height_ratio = canvas_height / frame_height
+            scale_factor = min(width_ratio, height_ratio)
+            
+            new_width = int(frame_width * scale_factor)
+            new_height = int(frame_height * scale_factor)
+            
+            resized_frame = cv2.resize(self.current_frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
+            
+            self.photo = ImageTk.PhotoImage(image=Image.fromarray(resized_frame))
+            
+            self.canvas.delete("all")
+            self.canvas.create_image(canvas_width/2, canvas_height/2, image=self.photo, anchor=tk.CENTER)
+        else:
+            self.canvas.delete("all")
+            self.canvas.create_text(10, 10, text="Initializing display...", fill="white", anchor=tk.NW)
         
         self.root.after(10, self.process_video)
-        
+    
     def collect_examples(self):
         if not self.running:
             messagebox.showwarning("Warning", "Start the camera first.")
@@ -885,9 +974,17 @@ class ASLTranslatorGUI:
         self.update_status(f"Dynamic gesture recognition {status}")
         self.translator.landmark_buffer.clear()
         
+    def toggle_tts(self):
+        self.tts_enabled = self.tts_var.get()
+        status = "enabled" if self.tts_enabled else "disabled"
+        self.update_status(f"Text-to-speech {status}")
+        
     def speak_last_prediction(self):
         if hasattr(self.translator, 'last_sign') and self.translator.last_sign:
-            self.tts_engine(self.translator.last_sign)
+            if self.tts_enabled:
+                self.tts_engine(self.translator.last_sign)
+            else:
+                self.update_status("Text-to-speech is disabled.")
         else:
             self.update_status("No sign detected yet.")
             
